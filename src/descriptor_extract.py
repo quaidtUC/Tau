@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+__version__ = "0.1.0"
 """
 descriptor_extract.py  <folder_with_out_and_xyz>
 
@@ -15,6 +16,7 @@ Author: (2025-06-24)  — drop-in replacement for quick_extract.py
 
 # ---------- standard library ----------
 import sys, os, re, json, math, tempfile, subprocess, shutil, itertools, pathlib
+import argparse
 from   pathlib import Path
 from typing import List
 
@@ -181,5 +183,67 @@ def main(argv:List[str]):
     df.to_csv("descriptors.csv", index=False)
     print(f"\n✅ descriptors.csv written with {len(rows)} ligands")
 
+# ---------- CLI ----------
+def _build_cli() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Extract buried volume, σ‑donation, Zn charge and other descriptors "
+                    "from ORCA output/XYZ pairs and write descriptors.csv")
+    p.add_argument("folder", nargs="?", default=DEFAULT_DIR,
+                   help=f"Folder containing *_H2O.out/xyz and *_HCO3.* files "
+                        f"(default: {DEFAULT_DIR})")
+    p.add_argument("-d", "--diag", action="store_true",
+                   help="print per‑ligand diagnostic block")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="suppress verbose logging")
+    p.add_argument("--self-test", action="store_true",
+                   help="run built‑in smoke‑test and exit")
+    p.add_argument("--version", action="version",
+                   version=f"%(prog)s {__version__}")
+    return p
+
+
+def self_test() -> None:
+    """Minimal smoke‑test: dummy ligand with fake ORCA/NBO lines."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        # ---- dummy XYZ (Zn‑N‑H) ----
+        xyz = td / "dummy_H2O.xyz"
+        xyz.write_text("3\ncomment\nZn 0 0 0\nN 0 0 2\nH 0 0 4\n")
+
+        # ---- dummy HCO3 XYZ ----
+        (td/"dummy_HCO3.xyz").write_text(xyz.read_text())
+
+        # ---- dummy OUT ----
+        out = td / "dummy_H2O.out"
+        out.write_text(""" SECOND ORDER PERTURBATION THEORY ANALYSIS OF FOCK MATRIX IN NBO BASIS
+  1. LP ( 1) N  1           97. LV ( 1)Zn  2           10.00    0.50   0.050
+ Natural Population Analysis
+ Zn          2    1.70000
+""")
+        (td/"dummy_HCO3.out").write_text(out.read_text())
+
+        row = process("dummy", td)
+        assert not math.isnan(row["vbur_aqua"]),   "vbur nan"
+        assert row["sigma_e2"] == 10.0,            "σE2 wrong"
+        assert row["zn_q"] == 1.7,                 "Zn q wrong"
+        print("Self‑test OK")
+
+
 if __name__ == "__main__":
-    main(sys.argv)
+    import argparse
+    cli = _build_cli()
+    args = cli.parse_args()
+
+    # configure globals
+    VERBOSE = not args.quiet
+    DIAG    = args.diag
+
+    if args.self_test:
+        try:
+            self_test()
+            sys.exit(0)
+        except Exception as e:
+            print(f"[FAIL] self-test: {e}")
+            sys.exit(1)
+
+    main([sys.argv[0], str(args.folder)])
